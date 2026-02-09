@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l \"C:\\\\Users\\\\Cadonna\\\\DEV\\\\personal ai projects\\\\23_\\\\workflow\\\\agents\"\"*.md \"C:UsersCadonnaDEVpersonal ai projects23_workflowprompts\"\"*.md)",
+      "Bash(find:*)"
+    ]
+  }
+}
