@@ -242,9 +242,14 @@ func InitCA(dataDir string, subject pkix.Name, keyAlgo string, validityDays int)
 // STAGE SUB-PHASE (ADR-006):
 // 6. Stage ca.key → ca.key.tmp, ca.crt → ca.crt.tmp, serial → serial.tmp,
 //    crlnumber → crlnumber.tmp, index.json → index.json.tmp.
-//    If any stage write fails: cleanupTempFiles, remove data directory, return error.
+//    If any stage write fails: cleanupTempFiles, remove only the certs/
+//    subdirectory if it was created by this init attempt, return error.
+//    The data directory itself is NOT removed — it may contain unrelated
+//    user files if --data-dir pointed to a pre-existing directory.
 // COMMIT SUB-PHASE (ADR-006):
-// 7. Rename in order: ca.key, ca.crt, serial, crlnumber, index.json.
+// 7. Rename in order: serial, crlnumber, index.json, ca.key, ca.crt.
+//    (Support files first; initialization markers ca.key/ca.crt last
+//    so IsInitialized remains false until all required state is in place.)
 // 8. Return InitResult.
 
 func SignCSR(dataDir string, csrPEM []byte, csrPath string, validityDays int) (*SignResult, error)

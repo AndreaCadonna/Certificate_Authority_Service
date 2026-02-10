@@ -75,13 +75,18 @@ Partial-commit outcomes (crash between renames):
 
 | Step | Rename | Rationale |
 |------|--------|-----------|
-| 1 | `ca.key.tmp` → `ca.key` | Key must exist before cert references it |
-| 2 | `ca.crt.tmp` → `ca.crt` | Certificate depends on key |
-| 3 | `serial.tmp` → `serial` | Counter files |
-| 4 | `crlnumber.tmp` → `crlnumber` | Counter files |
-| 5 | `index.json.tmp` → `index.json` | Index last |
+| 1 | `serial.tmp` → `serial` | Counter/index files first — these are not checked by `IsInitialized` |
+| 2 | `crlnumber.tmp` → `crlnumber` | Counter file |
+| 3 | `index.json.tmp` → `index.json` | Index file |
+| 4 | `ca.key.tmp` → `ca.key` | Key committed before cert (cert references key) |
+| 5 | `ca.crt.tmp` → `ca.crt` | Certificate last — this is the final initialization marker |
 
-Note: `InitCA` is protected by the `IsInitialized` precondition — it only runs on an empty data directory, so partial commits during init leave a non-initialized state (missing `ca.key` or `ca.crt`), and the next `init` attempt will fail cleanly with "already initialized" only if both files exist. A failed partial init can be recovered by removing the data directory and re-running.
+Partial-commit outcomes (crash between renames):
+- After steps 1–3 only: Counter/index files exist but `ca.key` and `ca.crt` are absent. `IsInitialized` returns false. A retry of `ca init` will overwrite these orphaned files via the normal staging process (`.tmp` → rename replaces existing files atomically). No user intervention required.
+- After step 4 only (key present, cert absent): `IsInitialized` returns false (requires both files). Same recovery as above.
+- After all 5: Fully consistent and initialized.
+
+Note: `IsInitialized` returns true only when both `ca.key` and `ca.crt` exist. By committing these marker files last (steps 4–5), a crash at any earlier point leaves the system in a non-initialized state, allowing `ca init` to be re-run safely. The support files (serial, crlnumber, index.json) are guaranteed to be in place before the system becomes visible as initialized.
 
 ### Cleanup Helper
 
@@ -92,6 +97,8 @@ func cleanupTempFiles(paths []string)
 ```
 
 This removes all `.tmp` files in the list, ignoring errors (best-effort). It is called on stage-sub-phase failure to ensure no `.tmp` artifacts are left behind.
+
+**InitCA cleanup scope**: On staging failure, `InitCA` calls `cleanupTempFiles` for all staged `.tmp` paths and removes the `certs/` subdirectory if it was created by this init attempt. The data directory itself is **not** removed — the `--data-dir` flag may point to a pre-existing directory containing unrelated files, and a transient I/O error (disk full, permission failure) must not cause destructive removal of user data. Only artifacts created by the current init attempt are cleaned up.
 
 ## Alternatives Considered
 
