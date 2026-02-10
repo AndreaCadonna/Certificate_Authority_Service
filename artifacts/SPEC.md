@@ -91,7 +91,7 @@ The following decisions resolve open questions from the research phase:
 
 **REQ-CP-005**: The system SHALL revoke a certificate by serial number. Upon revocation, the system SHALL record the revocation timestamp (UTC) and a reason code in the certificate index. Supported reason codes: `unspecified`, `keyCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation`. The default reason code SHALL be `unspecified`.
 
-**REQ-CP-006**: The system SHALL generate a signed X.509 CRL v2 containing the serial numbers and revocation dates of all revoked certificates. The CRL SHALL include `thisUpdate` (current time), `nextUpdate` (current time + configurable hours, default 24), a monotonically increasing CRL number, and the CA's signature. The CRL SHALL conform to the structure specified in REQ-DT-004.
+**REQ-CP-006**: The system SHALL generate a signed X.509 CRL v2 containing the serial numbers and revocation dates of all revoked certificates, and no others. The CRL SHALL include `thisUpdate` (current time), `nextUpdate` (current time + configurable hours, default 24), a monotonically increasing CRL number, and the CA's signature. The CRL SHALL conform to the structure specified in REQ-DT-004.
 
 **REQ-CP-007**: The system SHALL verify a given certificate by: (a) validating its signature against the CA certificate, (b) checking that the current time is within the certificate's validity period, and (c) checking the certificate's serial number against the CRL if a CRL file exists.
 
