@@ -497,6 +497,13 @@ When any command fails for any reason — CSR parse failure, CSR signature failu
 
 The system SHALL be in the exact same state as before the failed command was invoked.
 
+**Implementation strategy:** Two complementary mechanisms enforce this contract:
+
+1. **Validate-before-mutate** (ADR-003): All precondition checks execute before any state modification. Validation failures return errors without touching any files.
+2. **Atomic file replacement** (ADR-006): All mutate-phase writes use temp-file-then-rename (`writeFileAtomic`). Multi-file mutations stage all outputs to `.tmp` files first; if any staging write fails, all `.tmp` files are removed and no final paths are modified. Renames proceed in a defined commit order that minimizes inconsistency in the unlikely event of a process crash between renames.
+
+**Residual risk:** A process crash (e.g., SIGKILL, power loss) occurring between individual `rename(2)` calls in the commit sub-phase of a multi-file mutation can produce partially committed state. This window is on the order of microseconds and is inherent to flat-file storage without a write-ahead log. The commit order for each operation is defined in ADR-006 to ensure the least harmful partial state.
+
 **Traces to:** REQ-ER-001, REQ-ER-003, REQ-ER-004, REQ-ER-005, REQ-ER-006, REQ-ER-008
 
 ---

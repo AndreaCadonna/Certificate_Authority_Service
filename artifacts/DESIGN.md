@@ -160,7 +160,23 @@ func FormatSerialBig(n *big.Int) string
 // Same as FormatSerial but for *big.Int values from parsed certificates.
 ```
 
-**Contracts Enforced:** CON-DI-001 (PEM encoding), CON-DI-002 (hex format), CON-DI-003 (RFC 3339 timestamps — via IndexEntry schema), CON-DI-005 (index schema), CON-DI-007 (cert–index correspondence — file paths), CON-DI-008 (serial counter consistency), CON-DI-009 (CRL number consistency)
+**Private helpers (ADR-006 — atomic file replacement):**
+```go
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error
+// 1. Write data to path + ".tmp" with specified permissions.
+// 2. Rename path + ".tmp" → path (atomic on POSIX via rename(2)).
+// 3. On write failure: remove .tmp file, return error.
+// 4. On rename failure: remove .tmp file, return error.
+// All public write functions (SaveCertPEM, WriteCounter, SaveIndex,
+// SaveCRLPEM, SavePrivateKey) use this internally.
+
+func cleanupTempFiles(paths []string)
+// Best-effort removal of .tmp files. Called on stage-sub-phase failure
+// to ensure no temporary artifacts are left in the data directory.
+// Ignores removal errors.
+```
+
+**Contracts Enforced:** CON-DI-001 (PEM encoding), CON-DI-002 (hex format), CON-DI-003 (RFC 3339 timestamps — via IndexEntry schema), CON-DI-004 (atomicity — via writeFileAtomic, ADR-006), CON-DI-005 (index schema), CON-DI-007 (cert–index correspondence — file paths), CON-DI-008 (serial counter consistency), CON-DI-009 (CRL number consistency)
 **Requirements Served:** REQ-DT-001, REQ-DT-005, REQ-DT-006, REQ-DT-007
 
 **Data Flow:**
@@ -216,12 +232,20 @@ var ValidReasons = []string{
 }
 
 func InitCA(dataDir string, subject pkix.Name, keyAlgo string, validityDays int) (*InitResult, error)
+// VALIDATE PHASE:
 // 1. Check IsInitialized → error if true (CON-BD-003).
+// MUTATE PHASE:
 // 2. Generate key pair (ECDSA P-256 or RSA 2048) using crypto/rand (CON-SC-002).
 // 3. Build X.509v3 template: serial 01, subject=issuer, validity, extensions per CON-DI-011.
 // 4. Self-sign with x509.CreateCertificate (CON-INV-006, CON-INV-008).
-// 5. Call InitDataDir, SavePrivateKey, SaveCertPEM.
-// 6. Return InitResult.
+// 5. Create data directory and certs/ subdirectory.
+// STAGE SUB-PHASE (ADR-006):
+// 6. Stage ca.key → ca.key.tmp, ca.crt → ca.crt.tmp, serial → serial.tmp,
+//    crlnumber → crlnumber.tmp, index.json → index.json.tmp.
+//    If any stage write fails: cleanupTempFiles, remove data directory, return error.
+// COMMIT SUB-PHASE (ADR-006):
+// 7. Rename in order: ca.key, ca.crt, serial, crlnumber, index.json.
+// 8. Return InitResult.
 
 func SignCSR(dataDir string, csrPEM []byte, csrPath string, validityDays int) (*SignResult, error)
 // VALIDATE PHASE (all before any mutation — CON-DI-004, CON-SC-003):
@@ -236,10 +260,16 @@ func SignCSR(dataDir string, csrPEM []byte, csrPath string, validityDays int) (*
 // 8. Build X.509v3 template: serial from counter, issuer=CA DN, subject=CSR DN,
 //    validity, extensions per CON-DI-012.
 // 9. x509.CreateCertificate (CON-INV-005, CON-INV-008).
-// 10. SaveCertPEM to certs/<serial>.pem.
-// 11. WriteCounter (serial + 1).
-// 12. Append IndexEntry to index, SaveIndex.
-// 13. Return SignResult.
+// STAGE SUB-PHASE (ADR-006 — all writes to .tmp files):
+// 10. Stage serial counter (serial + 1) → serial.tmp.
+// 11. Stage cert PEM → certs/<serial>.pem.tmp.
+// 12. Stage updated index → index.json.tmp.
+//     If any stage write fails: cleanupTempFiles, return error.
+// COMMIT SUB-PHASE (ADR-006 — rename .tmp → final in defined order):
+// 13. Rename serial.tmp → serial.         (prevents serial reuse)
+// 14. Rename certs/<serial>.pem.tmp → certs/<serial>.pem.
+// 15. Rename index.json.tmp → index.json. (commit point)
+// 16. Return SignResult.
 
 func RevokeCert(dataDir string, serialHex string, reason string) error
 // VALIDATE PHASE (CON-DI-004):
@@ -250,7 +280,7 @@ func RevokeCert(dataDir string, serialHex string, reason string) error
 // MUTATE PHASE:
 // 5. Set entry status="revoked", revoked_at=time.Now().UTC().Format(RFC3339),
 //    revocation_reason=reason.
-// 6. SaveIndex.
+// 6. SaveIndex (atomic via writeFileAtomic — ADR-006; single file, no staging needed).
 
 func ListCerts(dataDir string) ([]CertInfo, error)
 // 1. Check IsInitialized → error if false.
@@ -269,7 +299,7 @@ func generateKeyPair(keyAlgo string) (crypto.PrivateKey, error)
 // Generates ECDSA P-256 or RSA 2048 key pair using crypto/rand.
 ```
 
-**Contracts Enforced:** CON-INV-001 (serial uniqueness via monotonic counter), CON-INV-002 (serial monotonicity), CON-INV-003 (state irreversibility), CON-INV-004 (init prerequisite check), CON-INV-005 (chain of trust — sign with CA key), CON-INV-006 (self-signed root), CON-INV-008 (SHA-256), CON-INV-009 (index end-entity only), CON-INV-010 (supported key algos), CON-INV-011 (no identity verification), CON-BD-001 through CON-BD-009, CON-SC-002 (CSPRNG), CON-SC-003 (CSR validation gate), CON-DI-004 (atomicity via validate-before-mutate), CON-DI-005 (index schema), CON-DI-007 (cert–index correspondence), CON-DI-010 (X.509v3), CON-DI-011 (root extensions), CON-DI-012 (end-entity extensions)
+**Contracts Enforced:** CON-INV-001 (serial uniqueness via monotonic counter), CON-INV-002 (serial monotonicity), CON-INV-003 (state irreversibility), CON-INV-004 (init prerequisite check), CON-INV-005 (chain of trust — sign with CA key), CON-INV-006 (self-signed root), CON-INV-008 (SHA-256), CON-INV-009 (index end-entity only), CON-INV-010 (supported key algos), CON-INV-011 (no identity verification), CON-BD-001 through CON-BD-009, CON-SC-002 (CSPRNG), CON-SC-003 (CSR validation gate), CON-DI-004 (atomicity via validate-before-mutate + atomic replace per ADR-003/ADR-006), CON-DI-005 (index schema), CON-DI-007 (cert–index correspondence), CON-DI-010 (X.509v3), CON-DI-011 (root extensions), CON-DI-012 (end-entity extensions)
 **Requirements Served:** REQ-CP-001 through REQ-CP-005, REQ-CP-008, REQ-DT-002, REQ-DT-003, REQ-DT-007, REQ-ER-001 through REQ-ER-006, REQ-ER-008, REQ-MK-001, REQ-MK-004
 
 **Data Flow:**
@@ -348,9 +378,14 @@ func GenerateCRL(dataDir string, nextUpdateHours int) (*CRLResult, error)
 //    - Number: current CRL number (big.Int)
 //    - Extensions: AuthorityKeyIdentifier matching CA's SKI
 // 6. x509.CreateRevocationList (signed with CA key, SHA-256 — CON-INV-005, CON-INV-008).
-// 7. SaveCRLPEM to ca.crl (CON-DI-013).
-// 8. WriteCounter for crlnumber + 1 (CON-INV-007, CON-DI-009).
-// 9. Return CRLResult.
+// STAGE SUB-PHASE (ADR-006):
+// 7. Stage CRL PEM → ca.crl.tmp.
+// 8. Stage crlnumber counter (crlnumber + 1) → crlnumber.tmp.
+//    If any stage write fails: cleanupTempFiles, return error.
+// COMMIT SUB-PHASE (ADR-006):
+// 9. Rename ca.crl.tmp → ca.crl.       (CRL updated first)
+// 10. Rename crlnumber.tmp → crlnumber. (counter advanced)
+// 11. Return CRLResult.
 ```
 
 **Contracts Enforced:** CON-INV-004 (init prerequisite), CON-INV-005 (chain of trust — CRL signed by CA), CON-INV-007 (CRL number monotonicity), CON-INV-008 (SHA-256), CON-BD-010 through CON-BD-012, CON-DI-006 (CRL–index consistency), CON-DI-009 (CRL number consistency), CON-DI-013 (CRL structure), CON-DI-014 (system clock)
@@ -723,10 +758,10 @@ Error handling follows the **validate-before-mutate** pattern (see ADR-003). All
 | CON-DI-001 | Storage + CSR Generation | store.go, request.go | SavePrivateKey uses "PRIVATE KEY" header; SaveCertPEM uses "CERTIFICATE"; SaveCRLPEM uses "X509 CRL"; request.go uses "CERTIFICATE REQUEST" |
 | CON-DI-002 | Storage | store.go | FormatSerial/FormatSerialBig produce lowercase hex zero-padded to 2 digits; WriteCounter uses same format |
 | CON-DI-003 | CA Operations | ca.go | IndexEntry timestamps formatted with `time.Time.UTC().Format(time.RFC3339)` which produces `Z`-suffix |
-| CON-DI-004 | CA Operations + CRL | ca.go, crl.go | Validate-before-mutate pattern (ADR-003): all checks complete before any WriteCounter, SaveIndex, SaveCertPEM, or SaveCRLPEM |
+| CON-DI-004 | CA Operations + CRL + Storage | ca.go, crl.go, store.go | Validate-before-mutate pattern (ADR-003) + atomic file replacement with stage-then-commit protocol (ADR-006): all checks complete before any writes; all mutate-phase writes use writeFileAtomic; multi-file mutations stage to .tmp then rename in defined commit order |
 | CON-DI-005 | Storage | store.go | IndexEntry struct defines exactly 7 fields with correct JSON tags; SaveIndex serializes complete entries |
 | CON-DI-006 | CRL Generation | crl.go | GenerateCRL filters index for `status=="revoked"`, builds CRL entries from exactly that set |
-| CON-DI-007 | CA Operations + Storage | ca.go, store.go | SignCSR writes cert file AND index entry atomically in sequence; no orphaned files or entries |
+| CON-DI-007 | CA Operations + Storage | ca.go, store.go | SignCSR stages cert file AND index entry to .tmp files, then commits via rename in sequence (ADR-006); staging failure leaves no artifacts |
 | CON-DI-008 | CA Operations + Storage | ca.go, store.go | InitCA writes serial "02" after assigning "01" to root; SignCSR increments after each issuance |
 | CON-DI-009 | CRL Generation + Storage | crl.go, store.go | GenerateCRL increments crlnumber after CRL written; init writes "01" |
 | CON-DI-010 | CA Operations | ca.go | Go's x509.Certificate template version defaults to v3 when extensions are present |
