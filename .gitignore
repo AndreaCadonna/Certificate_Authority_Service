@@ -1,2 +1,19 @@
 # Claude Code
 .claude
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+ca
+ca.exe
+
+# Test and CA data
+ca-data/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
