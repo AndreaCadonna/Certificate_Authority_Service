@@ -14,6 +14,43 @@ Built in Go with **zero external dependencies** — uses only the Go standard li
 - **Certificate listing** with dynamic status (active, revoked, expired)
 - **CSR generation** utility for creating key pairs and certificate signing requests
 
+## Certificate Lifecycle
+
+```mermaid
+flowchart LR
+    Init["ca init\n(Root CA)"] --> Request["ca request\n(Key + CSR)"]
+    Request --> Sign["ca sign\n(Issue Cert)"]
+    Sign --> List["ca list\n(View Certs)"]
+    Sign --> Verify["ca verify\n(Check Cert)"]
+    Sign --> Revoke["ca revoke\n(Revoke Cert)"]
+    Revoke --> CRL["ca crl\n(Publish CRL)"]
+    CRL --> Verify
+```
+
+## Architecture
+
+```mermaid
+flowchart TD
+    CLI["main.go\nCLI Dispatch"]
+    CA["ca.go\nCA Operations"]
+    CRL["crl.go\nCRL Generation"]
+    VER["verify.go\nVerification"]
+    REQ["request.go\nCSR Generation"]
+    STORE["store.go\nPersistence"]
+    DN["dn.go\nDN/SAN Parsing"]
+
+    CLI --> CA
+    CLI --> CRL
+    CLI --> VER
+    CLI --> REQ
+    CA --> STORE
+    CA --> DN
+    CRL --> STORE
+    VER --> STORE
+    REQ --> DN
+    REQ --> STORE
+```
+
 ## Prerequisites
 
 - Go 1.21+

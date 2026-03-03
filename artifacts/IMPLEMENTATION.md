@@ -23,6 +23,56 @@ All 114 behavioral validation checks pass. All 51 contracts from CONTRACTS.md ar
 
 Each step was implemented on a feature branch, merged into `develop` with `--no-ff`, and the feature branch deleted after merge.
 
+```mermaid
+gitGraph
+    commit id: "initial"
+    branch develop
+    checkout develop
+
+    branch feature/step-1-foundation
+    commit id: "go.mod + dn.go"
+    checkout develop
+    merge feature/step-1-foundation id: "merge step 1"
+
+    branch feature/step-2-storage
+    commit id: "store.go"
+    checkout develop
+    merge feature/step-2-storage id: "merge step 2"
+
+    branch feature/step-3-ca-operations
+    commit id: "ca.go"
+    checkout develop
+    merge feature/step-3-ca-operations id: "merge step 3"
+
+    branch feature/step-4-csr-generation
+    commit id: "request.go"
+    checkout develop
+    merge feature/step-4-csr-generation id: "merge step 4"
+
+    branch feature/step-5-crl-generation
+    commit id: "crl.go"
+    checkout develop
+    merge feature/step-5-crl-generation id: "merge step 5"
+
+    branch feature/step-6-verification
+    commit id: "verify.go"
+    checkout develop
+    merge feature/step-6-verification id: "merge step 6"
+
+    branch feature/step-7-cli-dispatch
+    commit id: "main.go"
+    checkout develop
+    merge feature/step-7-cli-dispatch id: "merge step 7"
+
+    branch feature/step-8-validation
+    commit id: "validate.sh"
+    checkout develop
+    merge feature/step-8-validation id: "merge step 8"
+
+    checkout main
+    merge develop id: "v1.0 complete"
+```
+
 ---
 
 ## 3. Deviations from Design Plan

@@ -61,6 +61,62 @@ Certificate_Authority_Service/
 | `dn.go` | DN and SAN string parsing | `ParseDN()`, `FormatDN()`, `ParseSANs()`, `AlgoDisplayName()` | None (leaf dependency) |
 | `validate.sh` | Behavioral validation script | Shell functions for lifecycle testing, `check()` helper, `check_stdout_contains()`, `check_file_exists()` | Compiled `ca` binary |
 
+### Module Dependency Graph
+
+```mermaid
+classDiagram
+    direction TB
+
+    class main_go ["main.go"] {
+        +main()
+        +resolveDataDir()
+        +runInit() / runSign() / ...
+    }
+
+    class ca_go ["ca.go"] {
+        +InitCA()
+        +SignCSR()
+        +RevokeCert()
+        +ListCerts()
+    }
+
+    class crl_go ["crl.go"] {
+        +GenerateCRL()
+    }
+
+    class verify_go ["verify.go"] {
+        +VerifyCert()
+    }
+
+    class request_go ["request.go"] {
+        +GenerateCSR()
+    }
+
+    class store_go ["store.go"] {
+        +SavePrivateKey() / LoadPrivateKey()
+        +SaveCertPEM() / LoadCertificate()
+        +ReadCounter() / WriteCounter()
+        +LoadIndex() / SaveIndex()
+    }
+
+    class dn_go ["dn.go"] {
+        +ParseDN()
+        +FormatDN()
+        +ParseSANs()
+    }
+
+    main_go --> ca_go
+    main_go --> crl_go
+    main_go --> verify_go
+    main_go --> request_go
+    ca_go --> store_go
+    ca_go --> dn_go
+    crl_go --> store_go
+    verify_go --> store_go
+    request_go --> dn_go
+    request_go --> store_go
+```
+
 ## §3 — Component Design
 
 ### §3.1 — DN/SAN Parser (`dn.go`)
@@ -534,79 +590,97 @@ func printUsage()
 
 ### Primary Use Case: Full Certificate Lifecycle
 
-```
-User (shell)
- │
- ▼
-main.go ─── resolveDataDir() ──► data directory path
- │
- ├── "init" ─► runInit()
- │              │
- │              ├── dn.go:ParseDN(--subject)
- │              │
- │              └── ca.go:InitCA()
- │                   ├── generateKeyPair() ◄── crypto/rand (CSPRNG)
- │                   ├── x509.CreateCertificate() (self-signed root)
- │                   └── store.go: InitDataDir, SavePrivateKey, SaveCertPEM
- │                        └── writes: ca.key, ca.crt, serial("02"),
- │                                    crlnumber("01"), index.json("[]"), certs/
- │
- ├── "request" ─► runRequest()
- │                 │
- │                 ├── dn.go:ParseDN(--subject), ParseSANs(--san)
- │                 │
- │                 └── request.go:GenerateCSR()
- │                      ├── generateKeyPair() ◄── crypto/rand
- │                      ├── x509.CreateCertificateRequest()
- │                      └── writes: <out-key>, <out-csr>
- │
- ├── "sign" ──► runSign()
- │               │
- │               ├── reads: <csr-file>
- │               │
- │               └── ca.go:SignCSR()
- │                    ├── VALIDATE: PEM decode, parse CSR, check signature, check key algo
- │                    ├── store.go: LoadPrivateKey, LoadCertificate, ReadCounter
- │                    ├── x509.CreateCertificate() (signed by CA key)
- │                    └── store.go: SaveCertPEM, WriteCounter, SaveIndex
- │                         └── writes: certs/<serial>.pem, serial, index.json
- │
- ├── "revoke" ► runRevoke()
- │               │
- │               └── ca.go:RevokeCert()
- │                    ├── VALIDATE: IsInitialized, LoadIndex, find serial, check status
- │                    └── store.go: SaveIndex
- │                         └── writes: index.json (status→"revoked")
- │
- ├── "crl" ───► runCRL()
- │               │
- │               └── crl.go:GenerateCRL()
- │                    ├── store.go: LoadPrivateKey, LoadCertificate, LoadIndex, ReadCounter
- │                    ├── filter revoked entries
- │                    ├── x509.CreateRevocationList() (signed by CA key)
- │                    └── store.go: SaveCRLPEM, WriteCounter
- │                         └── writes: ca.crl, crlnumber
- │
- ├── "list" ──► runList()
- │               │
- │               └── ca.go:ListCerts()
- │                    └── store.go: LoadIndex (read-only)
- │
- └── "verify" ► runVerify()
-                 │
-                 ├── reads: <cert-file>
-                 │
-                 └── verify.go:VerifyCert()
-                      ├── store.go: LoadCertificate (CA cert)
-                      ├── cert.CheckSignatureFrom(caCert)
-                      ├── time.Now() check against validity
-                      └── store.go: LoadCRL (if exists)
-                           └── check serial against CRL entries
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as main.go
+    participant CA as ca.go
+    participant CRL as crl.go
+    participant VER as verify.go
+    participant REQ as request.go
+    participant DN as dn.go
+    participant FS as store.go
+    participant Disk as ca-data/
+
+    Note over User,Disk: 1. Initialize Root CA
+    User->>CLI: ca init --subject "CN=..."
+    CLI->>DN: ParseDN(subject)
+    CLI->>CA: InitCA()
+    CA->>CA: generateKeyPair()
+    CA->>CA: x509.CreateCertificate() (self-signed)
+    CA->>FS: Stage .tmp files (ADR-006)
+    FS->>Disk: ca.key, ca.crt, serial, crlnumber, index.json
+
+    Note over User,Disk: 2. Generate Key + CSR
+    User->>CLI: ca request --subject "CN=..."
+    CLI->>DN: ParseDN(), ParseSANs()
+    CLI->>REQ: GenerateCSR()
+    REQ->>REQ: generateKeyPair()
+    REQ->>Disk: server.key, server.csr
+
+    Note over User,Disk: 3. Sign CSR → Issue Certificate
+    User->>CLI: ca sign server.csr
+    CLI->>CA: SignCSR(csrPEM)
+    CA->>CA: Validate: parse, signature, key algo
+    CA->>FS: LoadPrivateKey, LoadCertificate, ReadCounter
+    CA->>CA: x509.CreateCertificate() (signed by CA)
+    CA->>FS: Stage .tmp files (ADR-006)
+    FS->>Disk: certs/02.pem, serial, index.json
+
+    Note over User,Disk: 4. Revoke Certificate
+    User->>CLI: ca revoke 02
+    CLI->>CA: RevokeCert("02")
+    CA->>FS: LoadIndex, validate, update status
+    FS->>Disk: index.json (status→revoked)
+
+    Note over User,Disk: 5. Generate CRL
+    User->>CLI: ca crl
+    CLI->>CRL: GenerateCRL()
+    CRL->>FS: Load CA key, cert, index, counter
+    CRL->>CRL: x509.CreateRevocationList()
+    CRL->>FS: Stage .tmp files (ADR-006)
+    FS->>Disk: ca.crl, crlnumber
+
+    Note over User,Disk: 6. Verify Certificate
+    User->>CLI: ca verify cert.pem
+    CLI->>VER: VerifyCert(certPEM)
+    VER->>FS: LoadCertificate (CA cert)
+    VER->>VER: CheckSignatureFrom, expiry, CRL check
+    VER-->>User: VALID / INVALID
 ```
 
 ## §5 — Error Handling Strategy
 
 Error handling follows the **validate-before-mutate** pattern (see ADR-003). All validation occurs before any state is modified. If validation fails, the system returns an error and exits without touching persistent state (CON-DI-004).
+
+```mermaid
+flowchart TD
+    Start([Command Invoked]) --> UsageCheck{Usage valid?}
+    UsageCheck -->|No| Exit2[Exit code 2\nUsage error]
+    UsageCheck -->|Yes| Validate
+
+    subgraph Validate ["Validate Phase (no writes)"]
+        V1[Check preconditions] --> V2{All checks pass?}
+    end
+
+    Validate -->|No| Exit1[Exit code 1\nOperational error]
+
+    V2 -->|Yes| Stage
+
+    subgraph Stage ["Stage Phase (write .tmp files)"]
+        S1[Write data to .tmp files] --> S2{All staged?}
+    end
+
+    S2 -->|No| Cleanup[Cleanup .tmp files\nReturn error]
+
+    S2 -->|Yes| Commit
+
+    subgraph Commit ["Commit Phase (atomic rename)"]
+        C1[Rename .tmp → final files]
+    end
+
+    Commit --> Exit0[Exit code 0\nSuccess]
+```
 
 **Error propagation model:**
 

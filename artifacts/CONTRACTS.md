@@ -34,6 +34,17 @@ Serial numbers SHALL be assigned in strictly monotonically increasing order. The
 
 A certificate's status transition is one-directional: `active` → `revoked`. Once a certificate's status is set to `revoked`, it SHALL never return to `active`. No other status values are permitted in the persistent index. Attempting to revoke an already-revoked certificate is an error.
 
+```mermaid
+stateDiagram-v2
+    [*] --> active: Certificate issued
+    active --> revoked: ca revoke (irreversible)
+    active --> expired: notAfter passes (display only)
+    revoked --> [*]
+    expired --> [*]
+
+    note right of revoked: Cannot return to active
+```
+
 **Traces to:** REQ-CP-005, REQ-ER-004
 
 ---
@@ -440,6 +451,22 @@ No certificate SHALL be issued without first completing both of the following ch
 2. The CSR's public key algorithm SHALL be confirmed as ECDSA P-256 or RSA 2048.
 
 Both checks SHALL pass before any certificate is created, any file is written to `certs/`, any serial number is consumed, or any entry is added to `index.json`. If either check fails, the system SHALL remain in the exact state it was in before the command was invoked.
+
+```mermaid
+flowchart TD
+    CSR([CSR Received]) --> Parse{PEM decode\n& parse OK?}
+    Parse -->|No| Err1["Error: failed to parse CSR"]
+    Parse -->|Yes| Sig{Self-signature\nvalid?}
+    Sig -->|No| Err2["Error: CSR signature\nverification failed"]
+    Sig -->|Yes| Algo{Key algorithm\nECDSA P-256 or RSA 2048?}
+    Algo -->|No| Err3["Error: unsupported\nkey algorithm"]
+    Algo -->|Yes| Gate[/Validation gate passed/]
+    Gate --> Mutate["Proceed to mutate phase\n(issue certificate)"]
+
+    Err1 --> NoChange[No state changes]
+    Err2 --> NoChange
+    Err3 --> NoChange
+```
 
 **Traces to:** REQ-CP-002, REQ-MK-004, REQ-ER-001, REQ-ER-006
 

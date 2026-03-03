@@ -48,6 +48,21 @@ An X.509v3 certificate contains these fields:
 
 #### CA Signing Operation
 
+```mermaid
+sequenceDiagram
+    participant Applicant
+    participant CA as Certificate Authority
+
+    Applicant->>Applicant: Generate key pair
+    Applicant->>Applicant: Create CSR (PKCS#10)
+    Applicant->>CA: Submit CSR
+    CA->>CA: Validate CSR self-signature
+    CA->>CA: Assign unique serial number
+    CA->>CA: Build X.509v3 certificate template
+    CA->>CA: Sign certificate with CA private key
+    CA-->>Applicant: Return signed certificate
+```
+
 1. Applicant generates a key pair and creates a CSR (PKCS#10) containing their public key, DN, and a self-signature.
 2. CA receives the CSR and validates the self-signature (proof of key possession).
 3. CA constructs a new X.509v3 certificate with the applicant's public key and identity, the CA's issuer DN, a unique serial number, a validity period, and appropriate extensions.
@@ -56,10 +71,18 @@ An X.509v3 certificate contains these fields:
 
 #### Chain of Trust
 
-```
-Root CA (self-signed, offline, cA=TRUE, pathLen=1)
-  └── Intermediate CA (signed by Root, cA=TRUE, pathLen=0)
-        └── End-Entity Certificate (signed by Intermediate, cA=FALSE)
+```mermaid
+flowchart TD
+    Root["Root CA\n(self-signed, cA=TRUE, pathLen=1)"]
+    Inter["Intermediate CA\n(signed by Root, cA=TRUE, pathLen=0)"]
+    EE["End-Entity Certificate\n(signed by Intermediate, cA=FALSE)"]
+
+    Root -->|signs| Inter
+    Inter -->|signs| EE
+
+    style Root fill:#f9d71c,stroke:#333,color:#000
+    style Inter fill:#87ceeb,stroke:#333,color:#000
+    style EE fill:#90ee90,stroke:#333,color:#000
 ```
 
 - **Root CA**: Self-signed. Its private key is the most sensitive asset in the entire PKI. In production, stored offline in HSMs.
@@ -70,12 +93,15 @@ Validation walks from end-entity upward: verify each certificate's signature aga
 
 #### Certificate Lifecycle States
 
-```
-[Generate Key Pair] → [Create CSR] → [CA Signs → ACTIVE]
-                                            │
-                                    ┌───────┴───────┐
-                                    ▼               ▼
-                               [EXPIRED]       [REVOKED]
+```mermaid
+stateDiagram-v2
+    [*] --> KeyGeneration: Generate Key Pair
+    KeyGeneration --> CSRCreation: Create CSR
+    CSRCreation --> Active: CA Signs Certificate
+    Active --> Expired: notAfter passes
+    Active --> Revoked: CA revokes
+    Expired --> [*]
+    Revoked --> [*]
 ```
 
 - **Active**: Issued and within validity period, not revoked.
